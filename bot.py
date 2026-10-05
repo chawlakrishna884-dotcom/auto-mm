@@ -736,206 +736,197 @@ class MMPanel(discord.ui.View):
         custom_id="mm_start_trade_v2",
     )
     async def start_trade(self, interaction, button):
-        await interaction.response.send_modal(TradeSetupModal())
+        if not interaction.guild:
+            return await interaction.response.send_message(
+                "❌ This can only be used inside a server.", ephemeral=True
+            )
+        await interaction.response.send_message(
+            "👥 Select the two people who are trading below.",
+            view=TradePartnerSelectView(), ephemeral=True,
+        )
 
 
-class TradeSetupModal(discord.ui.Modal, title="Start Middleman Trade"):
-    buyer = discord.ui.TextInput(
-        label="Buyer",
-        placeholder="Discord ID or @mention",
-        required=True,
-        max_length=100,
+class TradePartnerSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.buyer_id = None
+        self.seller_id = None
+
+    @discord.ui.select(
+        cls=discord.ui.UserSelect,
+        placeholder="👤 Select the Buyer",
+        min_values=1, max_values=1,
+        custom_id="mm_select_buyer_v1",
     )
+    async def select_buyer(self, interaction, select):
+        member = select.values[0]
+        if member.bot:
+            return await interaction.response.send_message(
+                "❌ Bots cannot be trade partners.", ephemeral=True
+            )
+        self.buyer_id = member.id
+        await interaction.response.send_message(
+            f"✅ Buyer selected: {member.mention}", ephemeral=True
+        )
 
-    seller = discord.ui.TextInput(
-        label="Seller",
-        placeholder="Discord ID or @mention",
-        required=True,
-        max_length=100,
+    @discord.ui.select(
+        cls=discord.ui.UserSelect,
+        placeholder="👤 Select the Seller",
+        min_values=1, max_values=1,
+        custom_id="mm_select_seller_v1",
     )
+    async def select_seller(self, interaction, select):
+        member = select.values[0]
+        if member.bot:
+            return await interaction.response.send_message(
+                "❌ Bots cannot be trade partners.", ephemeral=True
+            )
+        self.seller_id = member.id
+        await interaction.response.send_message(
+            f"✅ Seller selected: {member.mention}", ephemeral=True
+        )
 
+    @discord.ui.button(
+        label="Continue", style=discord.ButtonStyle.success,
+        emoji="➡️", custom_id="mm_partner_continue_v1",
+    )
+    async def continue_trade(self, interaction, button):
+        if not interaction.guild:
+            return await interaction.response.send_message(
+                "❌ This can only be used inside a server.", ephemeral=True
+            )
+        if not self.buyer_id or not self.seller_id:
+            return await interaction.response.send_message(
+                "❌ Please select both the Buyer and Seller first.", ephemeral=True
+            )
+        if self.buyer_id == self.seller_id:
+            return await interaction.response.send_message(
+                "❌ Buyer and seller must be different users.", ephemeral=True
+            )
+        buyer = interaction.guild.get_member(self.buyer_id)
+        seller = interaction.guild.get_member(self.seller_id)
+        if not buyer or not seller:
+            return await interaction.response.send_message(
+                "❌ Both selected users must still be members of this server.", ephemeral=True
+            )
+        if buyer.bot or seller.bot:
+            return await interaction.response.send_message(
+                "❌ Bots cannot be trade partners.", ephemeral=True
+            )
+        await interaction.response.send_modal(TradeOfferModal(buyer.id, seller.id))
+
+
+class TradeOfferModal(discord.ui.Modal, title="Trade Details"):
     buyer_offer = discord.ui.TextInput(
         label="Buyer gives",
         placeholder="Example: 25 USD / Roblox item",
-        required=True,
-        max_length=1000,
+        required=True, max_length=1000,
         style=discord.TextStyle.paragraph,
     )
-
     seller_offer = discord.ui.TextInput(
         label="Seller gives",
         placeholder="Example: Dragon",
-        required=True,
-        max_length=1000,
+        required=True, max_length=1000,
         style=discord.TextStyle.paragraph,
     )
 
+    def __init__(self, buyer_id, seller_id):
+        super().__init__()
+        self.buyer_id = buyer_id
+        self.seller_id = seller_id
+
     async def on_submit(self, interaction):
         guild = interaction.guild
-
         if not guild:
             return await interaction.response.send_message(
-                "❌ This can only be used inside a server.",
-                ephemeral=True,
+                "❌ This can only be used inside a server.", ephemeral=True
             )
-
-        buyer_id = parse_user_id(self.buyer.value)
-        seller_id = parse_user_id(self.seller.value)
-
-        if not buyer_id or not seller_id:
-            return await interaction.response.send_message(
-                "❌ I couldn't understand one of the user IDs/mentions.",
-                ephemeral=True,
-            )
-
-        buyer = guild.get_member(buyer_id)
-        seller = guild.get_member(seller_id)
-
+        buyer = guild.get_member(self.buyer_id)
+        seller = guild.get_member(self.seller_id)
         if not buyer or not seller:
             return await interaction.response.send_message(
-                "❌ Both users must be in this server.",
-                ephemeral=True,
+                "❌ One of the selected trade partners is no longer in this server.", ephemeral=True
             )
-
+        if buyer.bot or seller.bot:
+            return await interaction.response.send_message(
+                "❌ Bots cannot be trade partners.", ephemeral=True
+            )
         if buyer.id == seller.id:
             return await interaction.response.send_message(
-                "❌ Buyer and seller must be different users.",
-                ephemeral=True,
+                "❌ Buyer and seller must be different users.", ephemeral=True
             )
-
         if get_open_trade_for_user(guild.id, buyer.id):
             return await interaction.response.send_message(
-                "❌ The buyer already has an open MM trade.",
-                ephemeral=True,
+                "❌ The buyer already has an open MM trade.", ephemeral=True
             )
-
         if get_open_trade_for_user(guild.id, seller.id):
             return await interaction.response.send_message(
-                "❌ The seller already has an open MM trade.",
-                ephemeral=True,
+                "❌ The seller already has an open MM trade.", ephemeral=True
             )
 
         cfg = get_config(guild.id)
-        category = (
-            guild.get_channel(cfg["ticket_category"])
-            if cfg["ticket_category"]
-            else None
-        )
-
+        category = guild.get_channel(cfg["ticket_category"]) if cfg["ticket_category"] else None
         overwrites = {
-            guild.default_role: discord.PermissionOverwrite(
-                view_channel=False
-            ),
-            buyer: discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_message_history=True,
-            ),
-            seller: discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_message_history=True,
-            ),
-            interaction.user: discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_message_history=True,
-            ),
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            buyer: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            seller: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
         }
-
         for role_id in (cfg["mm_role"], cfg["staff_role"]):
             if role_id:
                 role = guild.get_role(role_id)
                 if role:
                     overwrites[role] = discord.PermissionOverwrite(
-                        view_channel=True,
-                        send_messages=True,
-                        read_message_history=True,
-                        manage_messages=True,
+                        view_channel=True, send_messages=True,
+                        read_message_history=True, manage_messages=True,
                     )
 
-        channel_name = (
-            f"mm-{safe_channel_name(buyer.name)}-"
-            f"{safe_channel_name(seller.name)}"
-        )
-
+        channel_name = f"mm-{safe_channel_name(buyer.name)}-{safe_channel_name(seller.name)}"
         try:
             channel = await guild.create_text_channel(
-                channel_name[:95],
-                category=category,
-                overwrites=overwrites,
-                topic="Advanced Auto-MM trade ticket",
+                channel_name[:95], category=category,
+                overwrites=overwrites, topic="Advanced Auto-MM trade ticket",
             )
         except discord.Forbidden:
             return await interaction.response.send_message(
-                "❌ I don't have permission to create the MM ticket.",
-                ephemeral=True,
+                "❌ I don't have permission to create the MM ticket.", ephemeral=True
+            )
+        except discord.HTTPException:
+            return await interaction.response.send_message(
+                "❌ Discord could not create the MM ticket. Check the bot's permissions.", ephemeral=True
             )
 
         trade_id = execute(
             """
             INSERT INTO trades
-            (
-                guild_id, channel_id, buyer_id, seller_id,
-                buyer_offer, seller_offer, created_at, updated_at
-            )
+            (guild_id, channel_id, buyer_id, seller_id,
+             buyer_offer, seller_offer, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                guild.id,
-                channel.id,
-                buyer.id,
-                seller.id,
-                self.buyer_offer.value,
-                self.seller_offer.value,
-                now(),
-                now(),
-            ),
+            (guild.id, channel.id, buyer.id, seller.id,
+             self.buyer_offer.value, self.seller_offer.value, now(), now()),
         )
-
         trade = get_trade_by_id(trade_id)
-
         embed = trade_embed(trade)
         embed.description = (
             "Welcome to the **Advanced Auto-MM trade room**.\n\n"
             "🧠 AI monitors the conversation for suspicious behavior.\n"
             "🛡️ A human MM controls final verification.\n"
-            "🔐 Never send passwords, cookies, tokens, recovery codes, "
-            "or private keys."
+            "🔐 Never send passwords, cookies, tokens, recovery codes, or private keys."
         )
-
         await channel.send(
             content=f"{buyer.mention} {seller.mention}",
-            embed=embed,
-            view=TradeControls(),
-            allowed_mentions=discord.AllowedMentions(
-                users=True,
-                everyone=False,
-                roles=False,
-            ),
+            embed=embed, view=TradeControls(),
+            allowed_mentions=discord.AllowedMentions(users=True, everyone=False, roles=False),
         )
-
-        audit(
-            guild.id,
-            interaction.user.id,
-            "TRADE_CREATED",
-            f"Trade #{trade_id}: buyer={buyer.id}, seller={seller.id}",
-        )
-
+        audit(guild.id, interaction.user.id, "TRADE_CREATED",
+              f"Trade #{trade_id}: buyer={buyer.id}, seller={seller.id}")
         await interaction.response.send_message(
-            f"✅ Trade #{trade_id} created: {channel.mention}",
-            ephemeral=True,
+            f"✅ Trade #{trade_id} created: {channel.mention}", ephemeral=True
         )
-
         await send_log(
-            guild,
-            "🤝 MM Trade Created",
-            (
-                f"Trade #{trade_id}\n"
-                f"Buyer: {buyer.mention}\n"
-                f"Seller: {seller.mention}\n"
-                f"Created by: {interaction.user.mention}"
-            ),
+            guild, "🤝 MM Trade Created",
+            f"Trade #{trade_id}\nBuyer: {buyer.mention}\nSeller: {seller.mention}\nCreated by: {interaction.user.mention}",
             discord.Color.green(),
         )
 
